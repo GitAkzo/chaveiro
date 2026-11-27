@@ -3,7 +3,7 @@
 import base64
 from pathlib import Path
 
-PROJECT_DIR = Path(r"C:\Users\Raséc\.gemini\antigravity\scratch\chaveiro-3d-rasec")
+PROJECT_DIR = Path(__file__).resolve().parent
 STL_DIR = PROJECT_DIR / "stl"
 OUT_HTML = PROJECT_DIR / "visualizador_3d.html"
 

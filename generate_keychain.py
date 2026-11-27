@@ -11,14 +11,9 @@ from keychain_builder import (
 from preview_renderer import render_preview_sheet
 
 
-LOGO_PATH = Path(
-    r"C:/Users/Raséc/.gemini/antigravity/brain/bdfb3865-ff3b-4362-aa15-286dbca20411/.user_uploaded/media_1795796779513_933cc167.png"
-)
-PROJECT_DIR = Path(r"C:\Users\Raséc\.gemini\antigravity\scratch\chaveiro-3d-rasec")
+PROJECT_DIR = Path(__file__).resolve().parent
+LOGO_PATH = PROJECT_DIR / "assets" / "logo_rasec.png"
 OUT_DIR = PROJECT_DIR / "stl"
-ARTIFACT_PREVIEW = Path(
-    r"C:/Users/Raséc/.gemini/antigravity/brain/bdfb3865-ff3b-4362-aa15-286dbca20411/preview_chaveiro_3d_v2.png"
-)
 
 
 def _report_mesh(name: str, mesh) -> None:
@@ -66,7 +61,6 @@ def main() -> None:
 
     print("4/4 Renderizando painel de previa 3D...")
     render_preview_sheet(logo_mesh, base_mesh, lid_mesh, spec, PROJECT_DIR / "preview_chaveiro_3d_v2.png")
-    render_preview_sheet(logo_mesh, base_mesh, lid_mesh, spec, ARTIFACT_PREVIEW)
     print("Concluido com sucesso!")
 
 
