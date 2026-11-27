@@ -1,31 +1,36 @@
-"""Construcao parametrica 3D (watertight) do chaveiro com cavidade para LED."""
+"""Construcao parametrica 3D: Chaveiro estilo Mini Luminaria (Logo em pe + Base Oca LED)."""
 
 from dataclasses import dataclass
 import numpy as np
 import trimesh
 from shapely.geometry import Point, Polygon, box
 from shapely.ops import unary_union
+from shapely.affinity import translate
 
 
 @dataclass(frozen=True)
-class KeychainSpec:
-    """Dimensoes em milimetros otimizadas para FDM (bico 0.4mm, camada 0.2mm)."""
-    body_radius: float = 24.0          # Medalhao circular/organico 48mm diametro
-    wall_thickness: float = 2.4        # Parede lateral resistente
-    back_thickness: float = 1.6        # Parede traseira (com botao flexivel)
-    cavity_depth: float = 6.2          # Espaco interno para CR2032 (3.2mm) + LED
-    lip_height: float = 1.6            # Altura do degrau de encaixe da tampa frontal
-    lip_clearance: float = 0.25        # Folga radial para encaixe snap-fit/friccao
-    diffuser_thickness: float = 0.8    # Base fina difusora (deixa a luz passar)
-    logo_relief: float = 1.4           # Alto-relevo da logo na frente
-    ring_hole_d: float = 4.6           # Furo para argola de chaveiro
-    ring_outer_d: float = 11.4         # Alca reforcada ao redor do furo
-    battery_d: float = 20.8            # CR2032 (20.0mm) + folga 0.8mm
-    battery_wall: float = 1.2          # Parede do berco retentor da bateria
+class PedestalKeychainSpec:
+    """Dimensoes em mm — estilo base retangular arredondada + logo vertical translúcida."""
+    logo_width: float = 36.0           # Largura da logo em pe
+    logo_thickness: float = 3.8        # Espessura da logo (rigida + boa conducao de luz)
+    tab_depth: float = 3.2             # Espigas de encaixe que entram na base preta
+    slot_clearance: float = 0.25       # Folga para encaixe justo da logo na base
+
+    base_w: float = 42.0               # Largura da base preta
+    base_d: float = 25.0               # Profundidade da base preta (cabe CR2032 20mm)
+    base_h: float = 13.5               # Altura total da base preta
+    corner_r: float = 3.5              # Raio de arredondamento dos cantos da base
+    wall_t: float = 2.0                # Espessura das paredes laterais da base
+    top_t: float = 2.6                 # Espessura do teto da base (segura a logo firme)
+    lid_t: float = 1.6                 # Espessura da tampa inferior encaixavel
+    lid_clearance: float = 0.25        # Folga da tampa inferior
+
+    battery_d: float = 20.8            # CR2032 (20.0mm) + folga
+    ring_hole_d: float = 4.4           # Furo na lateral direita para argola de chaveiro
 
 
 def extrude_poly(poly, height: float, z0: float = 0.0) -> trimesh.Trimesh:
-    """Extruda Polygon ou MultiPolygon Shapely e posiciona em z0."""
+    """Extruda Polygon ou MultiPolygon Shapely em malha manifold."""
     geoms = list(poly.geoms) if hasattr(poly, "geoms") else [poly]
     meshes = []
     for g in geoms:
@@ -42,152 +47,162 @@ def extrude_poly(poly, height: float, z0: float = 0.0) -> trimesh.Trimesh:
     return trimesh.boolean.union(meshes, engine="manifold")
 
 
-def _base_silhouette(spec: KeychainSpec) -> tuple[Polygon, tuple[float, float]]:
-    """Cria o contorno circular principal + alca superior para argola."""
-    main_disc = Point(0, 0).buffer(spec.body_radius, resolution=96)
-    loop_y = spec.body_radius + 3.2
-    loop_center = (0.0, loop_y)
-    outer_loop = Point(loop_center).buffer(spec.ring_outer_d / 2.0, resolution=64)
-    # Pescoço suave conectando a alça ao corpo
-    neck = box(-5.2, spec.body_radius - 3.0, 5.2, loop_y)
-    silhouette = unary_union([main_disc, outer_loop, neck]).buffer(1.2).buffer(-1.2)
-    return silhouette, loop_center
+def _rounded_rect(w: float, d: float, r: float) -> Polygon:
+    """Retangulo centrado em (0, 0) com cantos arredondados de raio r."""
+    return box(-w / 2.0 + r, -d / 2.0 + r, w / 2.0 - r, d / 2.0 - r).buffer(r, resolution=32)
 
 
-def build_front_diffuser(logo_poly, spec: KeychainSpec) -> trimesh.Trimesh:
-    """Peca 01: Tampa frontal difusora + logo em alto-relevo + aba de encaixe.
+def _normalize_logo_feet(logo_poly) -> tuple[Polygon, tuple[float, float], tuple[float, float]]:
+    """Alinha a base inferior da logo em Y=0 e detecta os 2 pes de apoio (esfera esq + perna R)."""
+    minx, miny, maxx, maxy = logo_poly.bounds
+    cx = (minx + maxx) / 2.0
+    shifted = translate(logo_poly, xoff=-cx, yoff=-miny)
 
-    Imprimir deitada de costas (z=0 na mesa), ZERO suportes.
+    # Faixa inferior (y entre 0 e 3.5 mm) revela exatamente os dois pes que tocam a base
+    foot_band = shifted.intersection(box(-50.0, -0.1, 50.0, 3.5))
+    geoms = list(foot_band.geoms) if hasattr(foot_band, "geoms") else [foot_band]
+    geoms = sorted([g for g in geoms if g.area > 0.5], key=lambda g: g.bounds[0])
+
+    if len(geoms) >= 2:
+        left_foot = (geoms[0].bounds[0], geoms[0].bounds[2])
+        right_foot = (geoms[-1].bounds[0], geoms[-1].bounds[2])
+    else:
+        left_foot = (-13.0, -7.0)
+        right_foot = (5.0, 15.0)
+    return shifted, left_foot, right_foot
+
+
+def build_standing_logo(logo_poly, spec: PedestalKeychainSpec) -> tuple[trimesh.Trimesh, tuple[float, float], tuple[float, float]]:
+    """Peca 01: Logo em pe com 2 espigas de encaixe (imprime deitada, ZERO suportes)."""
+    logo_2d, left_foot, right_foot = _normalize_logo_feet(logo_poly)
+
+    # Espigas discretas descendo abaixo de Y=0 para travar na base e captar luz do LED
+    lx0, lx1 = left_foot
+    rx0, rx1 = right_foot
+    l_cx = (lx0 + lx1) / 2.0
+    l_hw = max(1.8, min((lx1 - lx0) * 0.42, 3.0))
+    left_tab = box(l_cx - l_hw, -spec.tab_depth, l_cx + l_hw, 1.8)
+
+    r_hw_l = rx0 + 0.5
+    r_hw_r = rx1 - 0.5
+    if r_hw_r - r_hw_l < 3.0:
+        r_cx = (rx0 + rx1) / 2.0
+        r_hw_l, r_hw_r = r_cx - 2.2, r_cx + 2.2
+    right_tab = box(r_hw_l, -spec.tab_depth, r_hw_r, 1.5)
+
+    full_2d = unary_union([logo_2d, left_tab, right_tab]).buffer(0)
+    mesh = extrude_poly(full_2d, spec.logo_thickness, z0=0.0)
+    return mesh, (l_cx - l_hw, l_cx + l_hw), (r_hw_l, r_hw_r)
+
+
+def build_pedestal_base(
+    left_tab_x: tuple[float, float],
+    right_tab_x: tuple[float, float],
+    spec: PedestalKeychainSpec,
+) -> trimesh.Trimesh:
+    """Peca 02: Base oca retangular arredondada com slots no topo, berco CR2032, LED e alca lateral.
+
+    Orientacao de impressao: z=0 e o TOPO da base (imprime de cabeca para baixo, ZERO suportes!).
+    Para visualizacao montada, basta inverter no eixo X (180 graus).
     """
-    inner_r = spec.body_radius - spec.wall_thickness
-    # Disco frontal difusor que cobre o topo do corpo (encaixe rebaixado)
-    front_disc = Point(0, 0).buffer(spec.body_radius - 0.15, resolution=96)
-    # Aba interna que encaixa dentro da cavidade do corpo
-    snap_r_out = inner_r - spec.lip_clearance
-    snap_r_in = snap_r_out - 1.4
-    snap_ring = (
-        Point(0, 0).buffer(snap_r_out, resolution=96)
-        .difference(Point(0, 0).buffer(snap_r_in, resolution=96))
+    outer_2d = _rounded_rect(spec.base_w, spec.base_d, spec.corner_r)
+    outer_mesh = extrude_poly(outer_2d, spec.base_h, z0=0.0)
+
+    # Alca compacta e discreta no canto traseiro direito (z=0..5.5mm na mesa, ZERO suportes)
+    ring_x = spec.base_w / 2.0 + 1.8
+    ring_y = -2.0
+    loop_outer = Point(ring_x, ring_y).buffer(spec.ring_hole_d / 2.0 + 2.4, resolution=48)
+    loop_neck = box(spec.base_w / 2.0 - 3.5, ring_y - 4.4, ring_x, ring_y + 4.4)
+    loop_hole = Point(ring_x, ring_y).buffer(spec.ring_hole_d / 2.0, resolution=48)
+    loop_2d = unary_union([loop_outer, loop_neck]).buffer(0.6).buffer(-0.6).difference(loop_hole)
+    loop_mesh = extrude_poly(loop_2d, 5.5, z0=0.0)
+    outer_mesh = trimesh.boolean.union([outer_mesh, loop_mesh], engine="manifold")
+
+    # 1. Cavidade interna oca (z vai de top_t ate base_h + 1)
+    inner_w = spec.base_w - 2.0 * spec.wall_t
+    inner_d = spec.base_d - 2.0 * spec.wall_t
+    cavity_2d = _rounded_rect(inner_w, inner_d, max(1.0, spec.corner_r - spec.wall_t))
+    cavity_mesh = extrude_poly(cavity_2d, spec.base_h - spec.top_t + 1.0, z0=spec.top_t)
+
+    # 2. Rebaixo no fundo da base (em z = base_h - lid_t) para tampa encaixar rente
+    seat_2d = _rounded_rect(
+        spec.base_w - 2.0, spec.base_d - 2.0, max(1.2, spec.corner_r - 1.0)
     )
+    seat_mesh = extrude_poly(seat_2d, spec.lid_t + 0.8, z0=spec.base_h - spec.lid_t)
 
-    # Orientacao de impressao: aba de encaixe fica voltada para baixo? Nao!
-    # Para ZERO suportes, a face traseira do difusor fica em z=0?
-    # Se a aba estiver em cima, a logo ficaria embaixo.
-    # Solucao ZERO suportes: a tampa encaixa DENTRO do rebaixo frontal do corpo!
-    # Entao a tampa e um disco plano de espessura diffuser_thickness (0.8mm)
-    # com raio = (body_radius - wall_thickness/2 - clearance), e a LOGO em relevo
-    # cresce para cima (+Z)! Sem aba saliente para baixo = 100% plana na mesa!
-    seat_r = spec.body_radius - 1.2 - spec.lip_clearance
-    plate_2d = Point(0, 0).buffer(seat_r, resolution=96)
-
-    # Pequena borda perimetral (aro fino de 0.8mm) para acabamento premium
-    rim_2d = plate_2d.difference(Point(0, 0).buffer(seat_r - 1.0, resolution=96))
-
-    plate_mesh = extrude_poly(plate_2d, spec.diffuser_thickness, z0=0.0)
-    ov = 0.08
-    rim_mesh = extrude_poly(
-        rim_2d, spec.logo_relief * 0.7 + ov, z0=spec.diffuser_thickness - ov
-    )
-    logo_mesh = extrude_poly(
-        logo_poly, spec.logo_relief + ov, z0=spec.diffuser_thickness - ov
-    )
-
-    front = trimesh.boolean.union([plate_mesh, rim_mesh, logo_mesh], engine="manifold")
-    return front
-
-
-def build_hollow_base(spec: KeychainSpec) -> trimesh.Trimesh:
-    """Peca 02: Base oca com alca, berco CR2032, canal LED e botao flexivel.
-
-    Imprimir com a traseira (z=0) apoiada na mesa, ZERO suportes.
-    """
-    silhouette, loop_center = _base_silhouette(spec)
-    ring_hole = Point(loop_center).buffer(spec.ring_hole_d / 2.0, resolution=64)
-    body_2d = silhouette.difference(ring_hole)
-
-    total_h = spec.back_thickness + spec.cavity_depth + spec.diffuser_thickness
-    outer_body = extrude_poly(body_2d, total_h, z0=0.0)
-
-    # 1. Cavidade principal oca (para bateria + LED + difusao de luz)
-    inner_r = spec.body_radius - spec.wall_thickness
-    cavity_2d = Point(0, 0).buffer(inner_r, resolution=96)
-    cavity_mesh = extrude_poly(
-        cavity_2d, spec.cavity_depth + spec.diffuser_thickness + 1.0, z0=spec.back_thickness
-    )
-
-    # 2. Rebaixo frontal (degrau onde a peca 01 encaixa perfeitamente nivelada)
-    seat_r = spec.body_radius - 1.2
-    seat_2d = Point(0, 0).buffer(seat_r, resolution=96)
-    seat_z = spec.back_thickness + spec.cavity_depth
-    seat_mesh = extrude_poly(seat_2d, spec.diffuser_thickness + 1.0, z0=seat_z)
-
-    # 3. Fenda em "U" na parede traseira criando botao flexivel (compliant button)
-    # Quando pressionado, empurra o terminal do LED contra a bateria CR2032
-    btn_r_out = 7.2
-    btn_r_in = 5.8
-    u_ring = Point(0, -1.5).buffer(btn_r_out, resolution=64).difference(
-        Point(0, -1.5).buffer(btn_r_in, resolution=64)
-    )
-    # Deixa a dobradica conectada na parte inferior (y < -6.5)
-    hinge_keep = box(-4.5, -12.0, 4.5, -5.8)
-    slot_2d = u_ring.difference(hinge_keep)
-    slot_mesh = extrude_poly(slot_2d, spec.back_thickness + 0.6, z0=-0.3)
+    # 3. Slots no topo (z=0..top_t) para encaixe vertical da logo + passagem de luz do LED
+    c = spec.slot_clearance
+    half_t = spec.logo_thickness / 2.0 + c
+    slot_left = box(left_tab_x[0] - c, -half_t, left_tab_x[1] + c, half_t)
+    slot_right = box(right_tab_x[0] - c, -half_t, right_tab_x[1] + c, half_t)
+    slots_2d = unary_union([slot_left, slot_right])
+    slots_mesh = extrude_poly(slots_2d, spec.top_t + 0.6, z0=-0.3)
 
     shell = trimesh.boolean.difference(
-        [outer_body, cavity_mesh, seat_mesh, slot_mesh], engine="manifold"
+        [outer_mesh, cavity_mesh, seat_mesh, slots_mesh], engine="manifold"
     )
 
-    # 4. Berco interno para bateria CR2032 (anel aberto para encaixar os terminais)
-    bat_cy = -2.0
+    # 4. Berco interno posicionador da bateria CR2032 (lado esquerdo/centro)
+    bat_cx = -6.5
     bat_r_in = spec.battery_d / 2.0
-    bat_r_out = bat_r_in + spec.battery_wall
-    cradle_ring = Point(0, bat_cy).buffer(bat_r_out, resolution=64).difference(
-        Point(0, bat_cy).buffer(bat_r_in, resolution=64)
+    bat_r_out = bat_r_in + 1.1
+    bat_ring = (
+        Point(bat_cx, 0.0).buffer(bat_r_out, resolution=64)
+        .difference(Point(bat_cx, 0.0).buffer(bat_r_in, resolution=64))
     )
-    # Aberturas no berco: topo para entrada do LED (5mm/3mm) e laterais para remocao facil
-    led_notch = box(-3.6, bat_cy + 5.0, 3.6, bat_cy + bat_r_out + 2.0)
-    side_notches = unary_union([
-        box(-bat_r_out - 2.0, bat_cy - 3.5, -bat_r_in + 1.0, bat_cy + 3.5),
-        box(bat_r_in - 1.0, bat_cy - 3.5, bat_r_out + 2.0, bat_cy + 3.5),
+    # Abre o lado direito do berco para os terminais do LED entrarem facilmente
+    bat_open = box(bat_cx + 4.5, -12.0, bat_cx + bat_r_out + 2.0, 12.0)
+    bat_cradle_2d = bat_ring.difference(bat_open).intersection(
+        _rounded_rect(inner_w + 0.4, inner_d + 0.4, 1.2)
+    )
+    bat_cradle = extrude_poly(bat_cradle_2d, 4.2, z0=spec.top_t - 0.1)
+
+    # 5. Colar guia para LED 5mm/3mm apontando para cima direto na perna direita do "R"
+    led_cx = (right_tab_x[0] + right_tab_x[1]) / 2.0
+    led_ring = (
+        Point(led_cx, 0.0).buffer(4.0, resolution=48)
+        .difference(Point(led_cx, 0.0).buffer(2.75, resolution=48))
+    )
+    led_notch = box(led_cx - 4.5, -1.8, led_cx, 1.8)
+    led_holder_2d = led_ring.difference(led_notch).intersection(
+        _rounded_rect(inner_w + 0.4, inner_d + 0.4, 1.2)
+    )
+    led_holder = extrude_poly(led_holder_2d, 5.5, z0=spec.top_t - 0.1)
+
+    return trimesh.boolean.union([shell, bat_cradle, led_holder], engine="manifold")
+
+
+def build_bottom_lid(spec: PedestalKeychainSpec) -> trimesh.Trimesh:
+    """Peca 03: Tampa inferior encaixavel com botao flexivel em U (imprime plana, ZERO suportes)."""
+    c = spec.lid_clearance
+    lid_2d = _rounded_rect(
+        spec.base_w - 2.0 - 2.0 * c,
+        spec.base_d - 2.0 - 2.0 * c,
+        max(1.0, spec.corner_r - 1.0 - c),
+    )
+
+    # Botao flexivel em U posicionado sobre o centro da bateria CR2032 (x = -6.5)
+    bx = -6.5
+    u_ring = Point(bx, 0.0).buffer(6.2, resolution=48).difference(
+        Point(bx, 0.0).buffer(4.9, resolution=48)
+    )
+    hinge_keep = box(bx - 8.0, -3.5, bx - 4.2, 3.5)
+    slot_u = u_ring.difference(hinge_keep)
+
+    # Pequeno chanfro lateral para abrir com a unha na troca de bateria
+    pry_notch = Point(spec.base_w / 2.0 - 1.0 - c, 0.0).buffer(1.4, resolution=24)
+
+    plate_2d = lid_2d.difference(unary_union([slot_u, pry_notch]))
+    plate_mesh = extrude_poly(plate_2d, spec.lid_t, z0=0.0)
+
+    # Pino atuador interno que pressiona o terminal do LED contra a bateria
+    nub = extrude_poly(Point(bx, 0.0).buffer(2.0, resolution=32), 1.4, z0=spec.lid_t - 0.08)
+
+    # Duas travinhas internas de alinhamento nas bordas curtas
+    tabs = unary_union([
+        box(-spec.base_w / 2.0 + 2.3, -4.5, -spec.base_w / 2.0 + 3.5, 4.5),
+        box(spec.base_w / 2.0 - 3.5, -4.5, spec.base_w / 2.0 - 2.3, 4.5),
     ])
-    cradle_2d = cradle_ring.difference(unary_union([led_notch, side_notches]))
-    # Limita dentro da cavidade
-    cradle_2d = cradle_2d.intersection(Point(0, 0).buffer(inner_r + 0.4, resolution=96))
-    cradle_mesh = extrude_poly(cradle_2d, 3.0, z0=spec.back_thickness - 0.1)
+    tabs_mesh = extrude_poly(tabs, 1.8, z0=spec.lid_t - 0.08)
 
-    # 5. Pequeno pino atuador interno no centro do botao flexivel
-    nub_2d = Point(0, -1.5).buffer(2.2, resolution=32)
-    nub_mesh = extrude_poly(nub_2d, 1.0, z0=spec.back_thickness - 0.1)
-
-    # 6. Clipes guia para o bulbo do LED (3mm ou 5mm) no topo da cavidade
-    led_y = 13.5
-    led_clip_l = box(-4.4, led_y - 2.2, -2.7, led_y + 2.2)
-    led_clip_r = box(2.7, led_y - 2.2, 4.4, led_y + 2.2)
-    clips_2d = unary_union([led_clip_l, led_clip_r]).intersection(
-        Point(0, 0).buffer(inner_r + 0.4, resolution=96)
-    )
-    clips_mesh = extrude_poly(clips_2d, 3.6, z0=spec.back_thickness - 0.1)
-
-    base = trimesh.boolean.union(
-        [shell, cradle_mesh, nub_mesh, clips_mesh], engine="manifold"
-    )
-    return base
-
-
-def build_solid_keychain(logo_poly, spec: KeychainSpec) -> trimesh.Trimesh:
-    """Peca 03 (Bonus): Chaveiro macico fino (3.6mm) pronto para troca de cor."""
-    silhouette, loop_center = _base_silhouette(spec)
-    ring_hole = Point(loop_center).buffer(spec.ring_hole_d / 2.0, resolution=64)
-    base_2d = silhouette.difference(ring_hole)
-
-    base_h = 2.2
-    rim_2d = Point(0, 0).buffer(spec.body_radius, resolution=96).difference(
-        Point(0, 0).buffer(spec.body_radius - 1.4, resolution=96)
-    )
-
-    ov = 0.08
-    base_mesh = extrude_poly(base_2d, base_h, z0=0.0)
-    rim_mesh = extrude_poly(rim_2d, 1.0 + ov, z0=base_h - ov)
-    logo_mesh = extrude_poly(logo_poly, 1.4 + ov, z0=base_h - ov)
-
-    return trimesh.boolean.union([base_mesh, rim_mesh, logo_mesh], engine="manifold")
+    return trimesh.boolean.union([plate_mesh, nub, tabs_mesh], engine="manifold")

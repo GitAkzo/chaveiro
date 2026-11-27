@@ -1,12 +1,12 @@
-"""Gera os arquivos STL prontos para impressao 3D e valida todas as malhas."""
+"""Gera os arquivos STL (v2 - estilo mini luminaria LED) e valida todas as malhas."""
 
 from pathlib import Path
 from logo_extractor import load_logo_polygons
 from keychain_builder import (
-    KeychainSpec,
-    build_front_diffuser,
-    build_hollow_base,
-    build_solid_keychain,
+    PedestalKeychainSpec,
+    build_standing_logo,
+    build_pedestal_base,
+    build_bottom_lid,
 )
 from preview_renderer import render_preview_sheet
 
@@ -17,14 +17,14 @@ LOGO_PATH = Path(
 PROJECT_DIR = Path(r"C:\Users\Raséc\.gemini\antigravity\scratch\chaveiro-3d-rasec")
 OUT_DIR = PROJECT_DIR / "stl"
 ARTIFACT_PREVIEW = Path(
-    r"C:/Users/Raséc/.gemini/antigravity/brain/bdfb3865-ff3b-4362-aa15-286dbca20411/preview_chaveiro_3d.png"
+    r"C:/Users/Raséc/.gemini/antigravity/brain/bdfb3865-ff3b-4362-aa15-286dbca20411/preview_chaveiro_3d_v2.png"
 )
 
 
 def _report_mesh(name: str, mesh) -> None:
     ext = mesh.extents
     vol_cm3 = abs(mesh.volume) / 1000.0
-    pla_g = vol_cm3 * 1.24  # densidade PLA ~1.24 g/cm3 (estimativa 100% solido)
+    pla_g = vol_cm3 * 1.24
     print(
         f"[{name}] watertight={mesh.is_watertight} | "
         f"faces={len(mesh.faces)} | "
@@ -35,27 +35,27 @@ def _report_mesh(name: str, mesh) -> None:
 
 def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    spec = KeychainSpec()
+    spec = PedestalKeychainSpec()
 
-    print("1/4 Extraindo silhueta vetorial da logo...")
+    print("1/4 Extraindo silhueta vetorial da logo com reforco estrutural...")
     logo_poly, (lw, lh) = load_logo_polygons(
         LOGO_PATH,
-        target_width_mm=31.0,
-        min_stroke_boost_mm=0.22,
+        target_width_mm=spec.logo_width,
+        min_stroke_boost_mm=0.35,
         simplify_tol_mm=0.08,
     )
     print(f"    Logo extraida: {lw:.1f} x {lh:.1f} mm | area={logo_poly.area:.1f} mm2")
 
-    print("2/4 Construindo malhas 3D manifold...")
-    front_mesh = build_front_diffuser(logo_poly, spec)
-    base_mesh = build_hollow_base(spec)
-    solid_mesh = build_solid_keychain(logo_poly, spec)
+    print("2/4 Construindo malhas 3D manifold (v2 Pedestal LED)...")
+    logo_mesh, left_tab_x, right_tab_x = build_standing_logo(logo_poly, spec)
+    base_mesh = build_pedestal_base(left_tab_x, right_tab_x, spec)
+    lid_mesh = build_bottom_lid(spec)
 
     print("3/4 Exportando arquivos STL...")
     exports = [
-        ("01_frente_logo_difusor.stl", front_mesh),
-        ("02_base_oca_led.stl", base_mesh),
-        ("03_chaveiro_macico_simples.stl", solid_mesh),
+        ("01_logo_translucida_vertical.stl", logo_mesh),
+        ("02_base_pedestal_led.stl", base_mesh),
+        ("03_tampa_inferior_botao.stl", lid_mesh),
     ]
     for filename, mesh in exports:
         out_file = OUT_DIR / filename
@@ -65,8 +65,8 @@ def main() -> None:
             raise RuntimeError(f"Malha {filename} nao e estanque (watertight)!")
 
     print("4/4 Renderizando painel de previa 3D...")
-    render_preview_sheet(front_mesh, base_mesh, solid_mesh, PROJECT_DIR / "preview_chaveiro_3d.png")
-    render_preview_sheet(front_mesh, base_mesh, solid_mesh, ARTIFACT_PREVIEW)
+    render_preview_sheet(logo_mesh, base_mesh, lid_mesh, spec, PROJECT_DIR / "preview_chaveiro_3d_v2.png")
+    render_preview_sheet(logo_mesh, base_mesh, lid_mesh, spec, ARTIFACT_PREVIEW)
     print("Concluido com sucesso!")
 
 
